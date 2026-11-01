@@ -1,5 +1,24 @@
 # Changelog
 
+- **2026-11-01** -- `0047` ([Thomas Kempka](https://github.com/thkempka)), opt-in with `TF_DS_KEEP_AT_WINDOW=1`: a
+  prompt's state is kept at the start of its last sliding window (`text_config.sliding_window` is 128) instead of the
+  last full 2048-row chunk end, so a warm replay re-prefills 128-143 rows and re-encodes no picture before them. A state
+  may not reach into the window, so the smallest tail is the window itself, and the gates that kept one at a chunk end
+  refused anything else: `prefillStep` only ever stopped at `min(chunk_rows, len - start)`, and the family's `usable()`
+  and `snapSaveFn` required `at % chunk_rows == 0` (the log line `keeping N tokens failed (NotAChunkEnd)`). The pass now
+  stops at `floor((prompt_len - window) / 16) * 16` (16 rows is the block the kernels capture) and keeps its state
+  there, standing at `at` when the hook runs, as `Reuse.MarkHook` requires: the chunk that ends there has run, and
+  `snapCopy` copies the live rings, so a keep taken after the final chunk would hold rows from past its own position and
+  a later prompt would compute from the earlier prompt's tail. The window's rows then run as the pass's last chunk, cut
+  at the position a cold pass cuts it, so a warm reply is bit-identical to a cold one: the rows before the keep are
+  copied, not recomputed, and the rows after it are the same rows of the same chunk. `usable()` and `snapSaveFn` accept
+  a 16-row-aligned state, both for the state a pass keeps and for one an earlier turn kept (a refused state is not a
+  miss: it is dropped and its prompt runs from 0, which is what made a chat whose history grew past its newest state
+  prefill cold). Off (the default) a pass keeps its state at the last full chunk end as before and cuts no extra chunk,
+  so cold passes and their replies are unchanged. `tools/validate_keep_at_window.py` sends each prompt cold and warm and
+  compares the replies' `token_sha` (text prompts below and above the prompt cache's 4096-token floor, and an image
+  prompt); the measurements are in
+  [#27](https://github.com/MiaAI-Lab/DeepSeek-V4.1-Flash-1017-4x-DGX-Sparks-TensorFold/pull/27).
 - **2026-11-01** -- README notes from three issues, none of them changing a default: `TF_DS_RDMA_CPUS` and the GB10's
   core layout ([making](https://github.com/making), [#40](https://github.com/MiaAI-Lab/DeepSeek-V4.1-Flash-1017-4x-DGX-Sparks-TensorFold/issues/40));
   what `__vm_enough_memory` in `dmesg` means ([#36](https://github.com/MiaAI-Lab/DeepSeek-V4.1-Flash-1017-4x-DGX-Sparks-TensorFold/issues/36));
